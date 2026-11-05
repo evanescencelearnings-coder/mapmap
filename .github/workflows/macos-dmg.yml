@@ -36,8 +36,32 @@ jobs:
 
       - name: Bundle Qt and sign (ad-hoc)
         run: |
-          macdeployqt MapMap.app
-          codesign --force --deep --sign - MapMap.app
+          LIBPATHS=""
+          for d in "$(brew --prefix)"/opt/qt*/lib; do LIBPATHS="$LIBPATHS -libpath=$d"; done
+          macdeployqt MapMap.app $LIBPATHS || true
+          # Vendored Syphon.framework ships without an Info.plist, which codesign rejects.
+          SY=MapMap.app/Contents/Frameworks/Syphon.framework
+          ls -la "$SY" "$SY/Versions" || true
+          mkdir -p "$SY/Versions/A/Resources"
+          [ -f "$SY/Versions/A/Resources/Info.plist" ] || cat > "$SY/Versions/A/Resources/Info.plist" <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>CFBundleExecutable</key><string>Syphon</string>
+            <key>CFBundleIdentifier</key><string>info.v002.Syphon</string>
+            <key>CFBundleName</key><string>Syphon</string>
+            <key>CFBundlePackageType</key><string>FMWK</string>
+            <key>CFBundleShortVersionString</key><string>5</string>
+            <key>CFBundleVersion</key><string>5</string>
+            <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+          </dict></plist>
+          EOF
+          # Sign inside-out: every framework and dylib, then the app itself.
+          find MapMap.app/Contents -name "*.dylib" -exec codesign --force --sign - {} \;
+          for f in MapMap.app/Contents/Frameworks/*.framework; do codesign --force --sign - "$f"; done
+          codesign --force --sign - MapMap.app
+          codesign --verify --deep --strict --verbose=2 MapMap.app
+          otool -L MapMap.app/Contents/MacOS/* | grep -E "homebrew|/usr/local" && { echo "Still linked to Homebrew paths"; exit 1; } || true
           QT_QPA_PLATFORM=offscreen ./MapMap.app/Contents/MacOS/mapmap --version || true
 
       - name: Make DMG
