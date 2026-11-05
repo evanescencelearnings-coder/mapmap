@@ -1,0 +1,68 @@
+name: macOS DMG
+
+on:
+  push:
+    branches: [mac-dmg]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  dmg:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest   # Apple Silicon
+            arch: arm64
+          - runner: macos-15-intel # Intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        run: |
+          brew install qt
+          echo "$(brew --prefix qt)/bin" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: |
+          qmake mapmap.pro CONFIG+=release CONFIG-=debug
+          make -j"$(sysctl -n hw.logicalcpu)"
+          APP="$(find . -maxdepth 1 -iname '*.app' | head -1)"
+          mv "$APP" MapMap.app.tmp && mv MapMap.app.tmp MapMap.app
+
+      - name: Bundle Qt and sign (ad-hoc)
+        run: |
+          macdeployqt MapMap.app
+          codesign --force --deep --sign - MapMap.app
+          QT_QPA_PLATFORM=offscreen ./MapMap.app/Contents/MacOS/mapmap --version || true
+
+      - name: Make DMG
+        run: |
+          VER="$(cat VERSION.txt)"
+          DMG="MapMap-${VER}-macOS-${{ matrix.arch }}.dmg"
+          mkdir dmgroot
+          cp -R MapMap.app dmgroot/
+          ln -s /Applications dmgroot/Applications
+          hdiutil create -volname MapMap -srcfolder dmgroot -ov -format UDZO "$DMG"
+          echo "DMG=$DMG" >> "$GITHUB_ENV"
+          ls -lh "$DMG"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.DMG }}
+          path: ${{ env.DMG }}
+
+      - name: Attach to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="mac-dmg-build"
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" --prerelease --target "$GITHUB_SHA" \
+              --title "MapMap macOS DMG" \
+              --notes "Unsigned macOS build of MapMap. Source: https://github.com/mapmapteam/mapmap" || true
+          gh release upload "$TAG" "$DMG" --clobber
