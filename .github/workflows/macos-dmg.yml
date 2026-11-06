@@ -36,7 +36,11 @@ jobs:
         run: |
           LIBPATHS=""
           for d in "$(brew --prefix)"/opt/qt*/lib; do LIBPATHS="$LIBPATHS -libpath=$d"; done
+          # Let macdeployqt resolve @rpath for every Homebrew Qt module (QtSvg, QtPdf, ...).
+          install_name_tool -add_rpath "$(brew --prefix)/lib" MapMap.app/Contents/MacOS/MapMap
           macdeployqt MapMap.app $LIBPATHS || true
+          install_name_tool -delete_rpath "$(brew --prefix)/lib" MapMap.app/Contents/MacOS/MapMap || true
+          ls MapMap.app/Contents/Frameworks
           # Vendored Syphon.framework ships without an Info.plist, which codesign rejects.
           SY=MapMap.app/Contents/Frameworks/Syphon.framework
           ls -la "$SY" "$SY/Versions" || true
@@ -69,7 +73,9 @@ jobs:
           mkdir dmgroot
           cp -R MapMap.app dmgroot/
           ln -s /Applications dmgroot/Applications
-          hdiutil create -volname MapMap -srcfolder dmgroot -ov -format UDZO "$DMG"
+          hdiutil create -volname MapMap -srcfolder dmgroot -fs HFS+ -ov -format UDZO "$DMG"
+          hdiutil verify "$DMG"
+          hdiutil attach -nobrowse -readonly "$DMG" && ls /Volumes/MapMap && hdiutil detach /Volumes/MapMap
           echo "DMG=$DMG" >> "$GITHUB_ENV"
           ls -lh "$DMG"
 
