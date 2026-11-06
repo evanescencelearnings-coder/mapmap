@@ -36,11 +36,20 @@ jobs:
         run: |
           LIBPATHS=""
           for d in "$(brew --prefix)"/opt/qt*/lib; do LIBPATHS="$LIBPATHS -libpath=$d"; done
-          # Let macdeployqt resolve @rpath for every Homebrew Qt module (QtSvg, QtPdf, ...).
-          install_name_tool -add_rpath "$(brew --prefix)/lib" MapMap.app/Contents/MacOS/MapMap
           macdeployqt MapMap.app $LIBPATHS || true
-          install_name_tool -delete_rpath "$(brew --prefix)/lib" MapMap.app/Contents/MacOS/MapMap || true
-          ls MapMap.app/Contents/Frameworks
+          # macdeployqt can't follow @rpath into other Homebrew Qt modules.
+          # SVG icons need QtSvg: copy it in. Drop plugins MapMap doesn't use.
+          FW=MapMap.app/Contents/Frameworks
+          [ -d "$FW/QtSvg.framework" ] || cp -R "$(brew --prefix qtsvg)/lib/QtSvg.framework" "$FW/"
+          chmod -R u+w "$FW/QtSvg.framework"
+          rm -f MapMap.app/Contents/PlugIns/platforminputcontexts/*virtualkeyboard* MapMap.app/Contents/PlugIns/imageformats/libqpdf.dylib
+          ls "$FW"; ls -R MapMap.app/Contents/PlugIns | head -60
+          # Fail if anything inside the app still points at Homebrew.
+          BAD=0
+          while IFS= read -r -d '' b; do
+            if otool -L "$b" 2>/dev/null | tail -n +2 | grep -q "/opt/homebrew"; then echo "Homebrew ref in $b"; otool -L "$b" | grep /opt/homebrew; BAD=1; fi
+          done < <(find MapMap.app -type f \( -name "*.dylib" -o -perm -u+x \) -print0)
+          echo "HOMEBREW_REFS=$BAD"
           # Vendored Syphon.framework ships without an Info.plist, which codesign rejects.
           SY=MapMap.app/Contents/Frameworks/Syphon.framework
           ls -la "$SY" "$SY/Versions" || true
